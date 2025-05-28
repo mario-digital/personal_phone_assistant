@@ -9,12 +9,18 @@
     "build": "tsc && npm run build:copy-assets",
     "build:copy-assets": "copyfiles src/assets/* src/assets/**/* --up 2 --exclude **/*.ts dist/assets/",
     "prestart": "npm run build",
-    "predeploy": "npm run build"
+    "predeploy": "npm run build",
+    "dev:tts": "node tts-server.js"
   },
   "dependencies": {
+    "elevenlabs": "^1.59.0",
     "@twilio-labs/serverless-runtime-types": "^4.0.0",
     "@twilio/runtime-handler": "1.2.2",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "fluent-ffmpeg": "^2.1.3",
     "openai": "^4.103.0",
+    "tmp": "^0.2.3",
     "twilio": "5.0.3"
   },
   "devDependencies": {

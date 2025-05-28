@@ -1,4 +1,4 @@
-const https = require('https');
+const { ElevenLabsClient } = require('elevenlabs');
 
 exports.handler = async (context, event, callback) => {
   try {
@@ -6,9 +6,16 @@ exports.handler = async (context, event, callback) => {
     
     console.log('Generating ElevenLabs audio for:', text);
     
-    const postData = JSON.stringify({
+    const elevenlabs = new ElevenLabsClient({
+      apiKey: process.env.ELEVENLABS_API_KEY
+    });
+    
+    // Use the 2025 API method
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || "pqHfZKP75CvOlQylNhV4";
+    const audioStream = await elevenlabs.textToSpeech.convertAsStream(voiceId, {
       text: text,
-      model_id: 'eleven_multilingual_v2',
+      model_id: "eleven_multilingual_v2",
+      output_format: "mp3_22050_32",
       voice_settings: {
         stability: 0.5,
         similarity_boost: 0.8,
@@ -17,53 +24,22 @@ exports.handler = async (context, event, callback) => {
       }
     });
     
-    const options = {
-      hostname: 'api.elevenlabs.io',
-      port: 443,
-      path: '/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL',
-      method: 'POST',
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': process.env.ELEVENLABS_API_KEY,
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-    
-    const audioData = await new Promise((resolve, reject) => {
-      const req = https.request(options, (res) => {
-        const chunks = [];
-        
-        res.on('data', (chunk) => {
-          chunks.push(chunk);
-        });
-        
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            resolve(Buffer.concat(chunks));
-          } else {
-            reject(new Error(`ElevenLabs API error: ${res.statusCode}`));
-          }
-        });
-      });
-      
-      req.on('error', (error) => {
-        reject(error);
-      });
-      
-      req.write(postData);
-      req.end();
-    });
+    // Collect all chunks into a buffer
+    const chunks = [];
+    for await (const chunk of audioStream) {
+      chunks.push(chunk);
+    }
+    const audioBuffer = Buffer.concat(chunks);
     
     // Return audio file directly
     callback(null, {
       statusCode: 200,
       headers: {
         'Content-Type': 'audio/mpeg',
-        'Content-Length': audioData.length,
-        'Cache-Control': 'public, max-age=3600'
+        'Content-Disposition': 'inline; filename="voice.mp3"',
+        'Cache-Control': 'public, max-age=300'
       },
-      body: audioData.toString('base64'),
+      body: audioBuffer.toString('base64'),
       isBase64Encoded: true
     });
     
