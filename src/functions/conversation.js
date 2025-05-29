@@ -1,25 +1,16 @@
 const OpenAI = require('openai');
 const Twilio = require('twilio');
 
+// Initialize OpenAI with environment variables
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 // Store conversation state (in production, use Redis or database)
 const conversations = new Map();
 
-// Default config - will be used if config file import fails
-const defaultConfig = {
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY,
-    model: 'gpt-4o',
-    maxTokens: 100,
-    temperature: 0.8
-  },
-  server: {
-    ngrokUrl: process.env.NGROK_URL || 'https://your-ngrok-url.ngrok-free.app'
-  },
-  twilio: {
-    phoneNumber: process.env.TWILIO_PHONE_NUMBER,
-    mainPhoneNumber: process.env.MAIN_PHONE_NUMBER,
-  },
-  systemMessage: `You are Zee, Mario's professional assistant. Be warm, conversational, and helpful. Act like a real human assistant would.
+// System message
+const systemMessage = `You are Zee, Mario's professional assistant. Be warm, conversational, and helpful. Act like a real human assistant would.
 
 Your goals:
 1. Get the caller's name politely
@@ -35,22 +26,35 @@ Keep responses natural and under 25 words. Use phrases like:
 - "Let me take down your message for Mario"
 - "I'll make sure Mario gets this message"
 
-Be professional but friendly, like a real assistant.`
-};
+Be professional but friendly, like a real assistant.`;
 
-// Use ngrok server for TTS playback with error handling
-async function playElevenLabsSpeech(twiml, text, config) {
+// Use TTS server for speech playback with error handling
+async function playElevenLabsSpeech(twiml, text) {
   try {
-    console.log('Using ngrok ElevenLabs for:', text);
-    // Ensure text is properly encoded
-    const encodedText = encodeURIComponent(text.trim());
-    const audioUrl = `${config.server.ngrokUrl}/tts?text=${encodedText}`;
+    // Get TTS configuration from environment variables
+    const ttsMode = process.env.TTS_MODE || 'vercel';
+    const baseUrl = ttsMode === 'local' 
+      ? process.env.LOCAL_TTS_URL 
+      : process.env.VERCEL_TTS_URL;
+    const endpoint = ttsMode === 'local' ? '/tts' : '/api/tts';
     
-    console.log('Audio URL:', audioUrl);
-    twiml.play(audioUrl);
+    if (baseUrl && baseUrl !== 'https://your-ngrok-url.ngrok-free.app') {
+      console.log(`Using ${ttsMode} TTS for:`, text);
+      const encodedText = encodeURIComponent(text.trim());
+      const audioUrl = `${baseUrl}${endpoint}?text=${encodedText}`;
+      
+      console.log('Audio URL:', audioUrl);
+      twiml.play(audioUrl);
+    } else {
+      console.log('No valid TTS URL, using Polly fallback');
+      twiml.say({
+        voice: 'Polly.Emma-Neural',
+        language: 'en-GB'
+      }, text);
+    }
   } catch (error) {
-    console.error('ElevenLabs/ngrok error:', error);
-    // Fallback to Polly if ngrok fails
+    console.error(`TTS error:`, error);
+    // Fallback to Polly if TTS fails
     twiml.say({
       voice: 'Polly.Emma-Neural',
       language: 'en-GB'
@@ -66,20 +70,12 @@ exports.handler = async (context, event, callback) => {
   
   console.log(`User said: "${userSpeech}" (confidence: ${confidence})`);
   
-  // Get config inside the handler function
-  let config = defaultConfig;
-  
   try {
-    // Initialize OpenAI
-    const openai = new OpenAI({
-      apiKey: config.openai.apiKey,
-    });
-
     // Get or create conversation history
     let conversation = conversations.get(callSid) || [
       {
         role: 'system',
-        content: config.systemMessage
+        content: systemMessage
       }
     ];
     
@@ -94,10 +90,10 @@ exports.handler = async (context, event, callback) => {
       let aiResponse;
       try {
         const completion = await openai.chat.completions.create({
-          model: config.openai.model,
+          model: 'gpt-4.1-nano',
           messages: conversation,
-          max_tokens: config.openai.maxTokens,
-          temperature: config.openai.temperature
+          max_tokens: 100,
+          temperature: 0.8
         });
         
         aiResponse = completion.choices[0].message.content;
@@ -117,13 +113,13 @@ exports.handler = async (context, event, callback) => {
       // Store updated conversation
       conversations.set(callSid, conversation);
       
-      // Generate and play ElevenLabs speech
-      await playElevenLabsSpeech(twiml, aiResponse, config);
+      // Generate and play speech
+      await playElevenLabsSpeech(twiml, aiResponse);
       
       // Check if conversation should end
       if (shouldEndConversation(aiResponse, conversation)) {
         // Send summary and end call
-        await sendSummaryToMario(context, event.From, conversation, config);
+        await sendSummaryToMario(context, event.From, conversation);
         twiml.say({
           voice: 'Polly.Emma-Neural',
           language: 'en-GB'
@@ -202,12 +198,15 @@ function shouldEndConversation(aiResponse, conversation) {
 }
 
 // Call Mario back with voice summary
-async function sendSummaryToMario(context, callerNumber, conversation, config) {
+async function sendSummaryToMario(context, callerNumber, conversation) {
   try {
     console.log('Starting voice summary process...');
     
     // Check if required environment variables exist
-    if (!config.twilio.phoneNumber || !config.twilio.mainPhoneNumber) {
+    const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+    const mainPhoneNumber = process.env.MAIN_PHONE_NUMBER;
+    
+    if (!twilioPhoneNumber || !mainPhoneNumber) {
       console.error('Missing Twilio phone numbers in environment variables');
       return;
     }
@@ -227,12 +226,12 @@ async function sendSummaryToMario(context, callerNumber, conversation, config) {
     const voiceSummary = `Hi Mario, this is Zee with a call summary. You received a call from ${callerInfo}. Here's what they said: ${userMessages}. End of summary.`;
     
     console.log('Voice summary:', voiceSummary);
-    console.log(`About to make call to ${config.twilio.mainPhoneNumber} from ${config.twilio.phoneNumber}`);
+    console.log(`About to make call to ${mainPhoneNumber} from ${twilioPhoneNumber}`);
     
     // Call Mario's phone numbers using environment variables
     const call = await client.calls.create({
-      from: config.twilio.phoneNumber,
-      to: config.twilio.mainPhoneNumber,
+      from: twilioPhoneNumber,
+      to: mainPhoneNumber,
       url: `https://${context.DOMAIN_NAME}/functions/voice-summary?message=${encodeURIComponent(voiceSummary)}`,
       timeout: 20 // Ring for 20 seconds then go to voicemail
     });
